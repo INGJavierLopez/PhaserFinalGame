@@ -1,20 +1,123 @@
 <!DOCTYPE html>
-<!-- Students: Please use this week's project for Week 7: Assignment 8: Using Level Maps + Tiles
-     You will need to modify the contents of the JavaScript file script.js with your own code, 
-     and create - or add - any other files as called for by the assignment requirements.
-     When you are done, be certain to upload a .zip of your project files and submit the 
-     assignment in Canvas to be graded. -->
 <html>
 
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width">
-	<title>ForestGame</title>
+	<title>Warrior Round Survavior</title>
 	<!-- load the most recent version of the Phaser JavaScript-based game engine -->
 	<script src="//cdn.jsdelivr.net/npm/phaser@3.85.2/dist/phaser.js"></script>
+	<style>
+		:root {
+			--bg: #e6e6e6;
+			--black: #000000;
+			--white: #ffffff;
+			--border: 4px solid #111111;
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			margin: 0;
+			font-family: Arial, Helvetica, sans-serif;
+			background: var(--bg);
+			color: #111111;
+		}
+
+		.page {
+			max-width: 1200px;
+			margin: 14px auto;
+			padding: 0 12px 24px;
+			border: var(--border);
+			background: var(--bg);
+		}
+
+		.banner {
+			margin-top: 10px;
+			background: var(--black);
+			color: var(--white);
+			border: var(--border);
+			padding: 34px 20px;
+		}
+
+		.banner h1 {
+			margin: 0;
+			font-size: clamp(2rem, 5vw, 3.8rem);
+			letter-spacing: 1px;
+		}
+
+		.info-box,
+		.controls-box {
+			margin-top: 18px;
+			border: var(--border);
+			background: #f3f3f3;
+			padding: 18px;
+		}
+
+		.info-box h2,
+		.controls-box h2 {
+			margin: 0 0 10px;
+			font-size: clamp(1.3rem, 3vw, 2rem);
+		}
+
+		.info-box p,
+		.controls-box p,
+		.controls-box li {
+			margin: 0 0 10px;
+			line-height: 1.5;
+		}
+
+		.game-wrapper {
+			margin-top: 20px;
+			display: flex;
+			justify-content: center;
+			align-items: center;
+			padding: 12px;
+		}
+
+		#game-container {
+			border: var(--border);
+			background: #d8d8d8;
+			min-height: 500px;
+			width: 1000px;
+			max-width: 100%;
+			display: flex;
+			justify-content: center;
+			align-items: center;
+			overflow: hidden;
+		}
+	</style>
 </head>
 
 <body>
+	<main class="page">
+		<header class="banner">
+			<h1>Warrior Round Survavior</h1>
+		</header>
+
+		<section class="info-box">
+			<h2>INFO</h2>
+			<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer nec odio. Praesent libero. Sed cursus ante dapibus diam. Sed nisi.</p>
+			<p>Nulla quis sem at nibh elementum imperdiet. Duis sagittis ipsum. Praesent mauris. Fusce nec tellus sed augue semper porta.</p>
+		</section>
+
+		<section class="game-wrapper">
+			<div id="game-container" aria-label="Game container"></div>
+		</section>
+
+		<section class="controls-box">
+			<h2>CONTROLS & COMBOS</h2>
+			<ul>
+				<li>WASD: Movimiento horizontal y ajuste de posición.</li>
+				<li>SPACE: Salto principal para esquivar o posicionarte.</li>
+				<li>Click Izquierdo: Cadena de ataque (Combo 1 → Combo 2 → Combo 3).</li>
+			</ul>
+			<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+		</section>
+	</main>
+
 	<!-- use the script.js file to contain all of your JavaScript code -->
 	<script src="script.js"></script>
 </body>
