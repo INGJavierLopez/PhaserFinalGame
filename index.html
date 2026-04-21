@@ -5,7 +5,6 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width">
 	<title>Warrior Round Survavior</title>
-	<!-- load the most recent version of the Phaser JavaScript-based game engine -->
 	<script src="//cdn.jsdelivr.net/npm/phaser@3.85.2/dist/phaser.js"></script>
 	<style>
 		:root {
@@ -118,8 +117,14 @@
 		</section>
 	</main>
 
-	<script src="src/state/RoundState.js"></script>
-	<script src="src/systems/PlayerMechanics.js"></script>
+	<script src="src/states/RoundState.js"></script>
+	<script src="src/hud/entities/CharacterHUD.js"></script>
+	<script src="src/hud/entities/EnemyHUD.js"></script>
+	<script src="src/hud/scenes/MainMenuHUD.js"></script>
+	<script src="src/hud/scenes/GameSceneHUD.js"></script>
+	<script src="src/hud/scenes/EndGameHUD.js"></script>
+	<script src="src/characters/MainCharacter.js"></script>
+	<script src="src/characters/Enemy.js"></script>
 	<script src="src/scenes/MainMenuScene.js"></script>
 	<script src="src/scenes/GameScene.js"></script>
 	<script src="src/scenes/EndGameScene.js"></script>
