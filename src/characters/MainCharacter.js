@@ -14,29 +14,43 @@
         graphics.destroy();
       }
 
-      scene.load.spritesheet("heroIdle", "/assets/IDLE.png", { frameWidth: 96, frameHeight: 84 });
-      scene.load.spritesheet("heroRun", "/assets/RUN.png", { frameWidth: 96, frameHeight: 84 });
-      scene.load.spritesheet("heroJump", "/assets/JUMP.png", { frameWidth: 96, frameHeight: 84 });
-      scene.load.spritesheet("heroAttack1", "/assets/ATTACK 1.png", { frameWidth: 96, frameHeight: 84 });
-      scene.load.spritesheet("heroAttack2", "/assets/ATTACK 2.png", { frameWidth: 96, frameHeight: 84 });
-      scene.load.spritesheet("heroAttack3", "/assets/ATTACK 3.png", { frameWidth: 96, frameHeight: 84 });
-      scene.load.spritesheet("heroAttack3RUN", "/assets/ATTACK 3 RUN.png", { frameWidth: 96, frameHeight: 84 });
-      scene.load.spritesheet("heroDeath", "/assets/DEATH.png", { frameWidth: 96, frameHeight: 84 });
-      scene.load.spritesheet("heroHurt", "/assets/HURT.png", { frameWidth: 96, frameHeight: 84 });
+      scene.load.spritesheet("heroIdle", "/assets/character/IDLE.png", { frameWidth: 96, frameHeight: 84 });
+      scene.load.spritesheet("heroRun", "/assets/character/RUN.png", { frameWidth: 96, frameHeight: 84 });
+      scene.load.spritesheet("heroJump", "/assets/character/JUMP.png", { frameWidth: 96, frameHeight: 84 });
+      scene.load.spritesheet("heroAttack1", "/assets/character/ATTACK 1.png", { frameWidth: 96, frameHeight: 84 });
+      scene.load.spritesheet("heroAttack2", "/assets/character/ATTACK 2.png", { frameWidth: 96, frameHeight: 84 });
+      scene.load.spritesheet("heroAttack3", "/assets/character/ATTACK 3.png", { frameWidth: 96, frameHeight: 84 });
+      scene.load.spritesheet("heroAttack3RUN", "/assets/character/ATTACK 3 RUN.png", { frameWidth: 96, frameHeight: 84 });
+      scene.load.spritesheet("heroDeath", "/assets/character/DEATH.png", { frameWidth: 96, frameHeight: 84 });
+      scene.load.spritesheet("heroHurt", "/assets/character/HURT.png", { frameWidth: 96, frameHeight: 84 });
     }
 
-    constructor(scene, maxHealth) {
+    constructor(scene, maxHealth, currentHealth, totalLives, currentLives) {
       this.scene = scene;
-      this.maxHealth = maxHealth || 3;
-      this.currentHealth = this.maxHealth;
+      this.maxHealth = maxHealth || 100;
+      this.totalLives = totalLives || 3;
+      this.currentLives = typeof currentLives === "number"
+        ? Math.max(0, Math.min(currentLives, this.totalLives))
+        : this.totalLives;
+      this.currentHealth = typeof currentHealth === "number"
+        ? Math.max(0, Math.min(currentHealth, this.maxHealth))
+        : this.maxHealth;
+      this.actionState = "normal";
       this.isDead = false;
+      this.canTakeDamage = true;
       this.facingRight = true;
       this.isAttacking = false;
+      this.isHurting = false;
       this.comboStep = 0;
       this.comboWindow = 500;
       this.comboInputWindowOpen = false;
       this.comboNextRequested = false;
       this.comboResetTimer = null;
+      this.attackHitboxTimer = null;
+      this.activeAttackAnimationKey = null;
+      this.attackAnimationCompleteHandler = null;
+      this.hurtAnimationCompleteHandler = null;
+      this.currentAttackId = 0;
       this.sprite = null;
       this.attackHitbox = null;
       this.keys = null;
@@ -68,7 +82,7 @@
         }
       }, this);
 
-      this.hud.create(16, 76, this.currentHealth, this.maxHealth);
+      this.hud.create(16, 76, this.currentLives, this.totalLives, this.currentHealth, this.maxHealth);
     }
 
     ensureAnimations() {
@@ -98,6 +112,75 @@
       }
     }
 
+    setActionState(nextState) {
+      this.actionState = nextState;
+      this.isAttacking = nextState === "attack";
+      this.isHurting = nextState === "hurt";
+    }
+
+    clearComboResetTimer() {
+      if (this.comboResetTimer) {
+        this.comboResetTimer.remove(false);
+        this.comboResetTimer = null;
+      }
+    }
+
+    clearAttackHitboxTimer() {
+      if (this.attackHitboxTimer) {
+        this.attackHitboxTimer.remove(false);
+        this.attackHitboxTimer = null;
+      }
+    }
+
+    disableAttackHitbox() {
+      this.clearAttackHitboxTimer();
+
+      if (!this.attackHitbox) {
+        return;
+      }
+
+      this.attackHitbox.setVisible(false);
+      this.attackHitbox.body.setEnable(false);
+    }
+
+    clearAttackAnimationCompletion() {
+      if (this.sprite && this.activeAttackAnimationKey && this.attackAnimationCompleteHandler) {
+        this.sprite.off("animationcomplete-" + this.activeAttackAnimationKey, this.attackAnimationCompleteHandler, this);
+      }
+
+      this.activeAttackAnimationKey = null;
+      this.attackAnimationCompleteHandler = null;
+    }
+
+    clearHurtAnimationCompletion() {
+      if (this.sprite && this.hurtAnimationCompleteHandler) {
+        this.sprite.off("animationcomplete-hero_hurt", this.hurtAnimationCompleteHandler, this);
+      }
+
+      this.hurtAnimationCompleteHandler = null;
+    }
+
+    resetComboState() {
+      this.clearComboResetTimer();
+      this.comboStep = 0;
+      this.comboInputWindowOpen = false;
+      this.comboNextRequested = false;
+    }
+
+    cancelAttackSequence() {
+      this.clearAttackAnimationCompletion();
+      this.resetComboState();
+      this.disableAttackHitbox();
+
+      if (this.actionState === "attack") {
+        this.setActionState("normal");
+      }
+    }
+
+    updateHUD() {
+      this.hud.updateStats(this.currentLives, this.totalLives, this.currentHealth, this.maxHealth);
+    }
+
     update(canAct) {
       if (!this.sprite || !this.sprite.active || this.isDead || !canAct) {
         return;
@@ -121,7 +204,7 @@
         this.sprite.setVelocityY(jumpForce);
       }
 
-      if (!this.isAttacking) {
+      if (this.actionState === "normal") {
         if (!this.sprite.body.blocked.down) {
           this.updateJumpFrame();
         } else if (this.keys.left.isDown || this.keys.right.isDown) {
@@ -134,7 +217,7 @@
       this.attackHitbox.x = this.facingRight ? this.sprite.x + 26 : this.sprite.x - 26;
       this.attackHitbox.y = this.sprite.y;
 
-      if (!this.isAttacking && this.comboInputWindowOpen && this.comboNextRequested) {
+      if (this.actionState === "normal" && this.comboInputWindowOpen && this.comboNextRequested) {
         this.comboInputWindowOpen = false;
         this.comboNextRequested = false;
 
@@ -159,10 +242,7 @@
     }
 
     attack() {
-      if (!this.sprite.active || this.isDead) {
-        return;
-      }
-      if (this.isAttacking) {
+      if (!this.sprite.active || this.isDead || this.actionState !== "normal") {
         return;
       }
       if (this.comboInputWindowOpen) {
@@ -174,17 +254,32 @@
       }
     }
 
-    startComboAttack(attackNumber) {
-      this.isAttacking = true;
-      this.comboInputWindowOpen = false;
-      this.comboNextRequested = false;
+    getCurrentAttackId() {
+      return this.currentAttackId;
+    }
 
-      if (this.comboResetTimer) {
-        this.comboResetTimer.remove(false);
-        this.comboResetTimer = null;
+    getCurrentAttackDamage() {
+      if (this.comboStep === 2) {
+        return 28;
+      }
+      if (this.comboStep === 3) {
+        return 42;
       }
 
+      return 18;
+    }
+
+    startComboAttack(attackNumber) {
+      this.setActionState("attack");
+      this.comboInputWindowOpen = false;
+      this.comboNextRequested = false;
+      this.clearComboResetTimer();
+      this.clearAttackAnimationCompletion();
+      this.clearHurtAnimationCompletion();
+
       this.comboStep = attackNumber;
+      // Generate a stable id per swing so enemies only take damage once per player attack.
+      this.currentAttackId += 1;
       this.sprite.setVelocityX(0);
 
       let currentAnimation = "hero_attack1";
@@ -196,56 +291,75 @@
       if (this.comboStep === 3) {
         const isMoving = this.keys.left.isDown || this.keys.right.isDown;
         currentAnimation = isMoving && this.sprite.body.blocked.down ? "hero_attack3_run" : "hero_attack3";
-        activeTime = 150;
+        activeTime = 350;
       }
 
       this.sprite.play(currentAnimation, true);
-      this.sprite.once("animationcomplete", (animation) => {
-        if (!this.sprite.active || this.isDead) {
+      this.activeAttackAnimationKey = currentAnimation;
+      this.attackAnimationCompleteHandler = () => {
+        this.activeAttackAnimationKey = null;
+        this.attackAnimationCompleteHandler = null;
+
+        if (!this.sprite.active || this.isDead || this.actionState !== "attack") {
           return;
         }
 
-        if (animation.key === "hero_attack3" || animation.key === "hero_attack3_run") {
-          this.comboStep = 0;
-          this.comboInputWindowOpen = false;
-          this.comboNextRequested = false;
+        if (currentAnimation === "hero_attack3" || currentAnimation === "hero_attack3_run") {
+          this.resetComboState();
         } else {
           this.comboInputWindowOpen = true;
           this.comboNextRequested = false;
           this.comboResetTimer = this.scene.time.delayedCall(this.comboWindow, () => {
-            this.comboStep = 0;
-            this.comboInputWindowOpen = false;
-            this.comboNextRequested = false;
-            this.comboResetTimer = null;
+            this.resetComboState();
           });
         }
 
-        this.isAttacking = false;
-      });
+        this.setActionState("normal");
+      };
+      this.sprite.once("animationcomplete-" + currentAnimation, this.attackAnimationCompleteHandler, this);
 
       this.attackHitbox.setVisible(true);
       this.attackHitbox.body.setEnable(true);
-      this.scene.time.delayedCall(activeTime, () => {
+      this.clearAttackHitboxTimer();
+      this.attackHitboxTimer = this.scene.time.delayedCall(activeTime, () => {
+        this.attackHitboxTimer = null;
+        if (!this.attackHitbox) {
+          return;
+        }
+
         this.attackHitbox.setVisible(false);
         this.attackHitbox.body.setEnable(false);
       });
     }
 
-    handleHit() {
+    handleHit(damageAmount) {
       if (this.isDead) {
         return true;
       }
+      if (!this.canTakeDamage) {
+        return false;
+      }
 
-      const isDead = this.takeDamage(1);
-      this.sprite.setVelocityY(-220);
+      const isDead = this.takeDamage(damageAmount);
+      this.canTakeDamage = false;
+      this.cancelAttackSequence();
+      this.clearHurtAnimationCompletion();
+      this.sprite.setVelocityY(-400);
 
       if (!isDead) {
+        this.setActionState("hurt");
         this.sprite.play("hero_hurt", true);
-        this.scene.time.delayedCall(250, () => {
-          if (this.sprite.active && !this.isDead && !this.isAttacking) {
-            this.sprite.play("hero_idle", true);
+        this.hurtAnimationCompleteHandler = () => {
+          this.hurtAnimationCompleteHandler = null;
+
+          if (!this.sprite.active || this.isDead || this.actionState !== "hurt") {
+            return;
           }
-        });
+
+          this.setActionState("normal");
+          this.canTakeDamage = true;
+        };
+        this.sprite.once("animationcomplete-hero_hurt", this.hurtAnimationCompleteHandler, this);
       }
 
       return isDead;
@@ -255,26 +369,41 @@
       if (this.isDead) {
         return true;
       }
-
-      this.currentHealth -= amount || 1;
-      if (this.currentHealth <= 0) {
-        this.currentHealth = 0;
-        this.isDead = true;
+      if (!this.canTakeDamage) {
+        return false;
       }
 
-      this.hud.updateHealth(this.currentHealth, this.maxHealth);
+      const damageAmount = Math.max(1, Math.round(amount || 1));
+      this.currentHealth -= damageAmount;
+      if (this.currentHealth <= 0) {
+        this.currentLives -= 1;
+
+        if (this.currentLives <= 0) {
+          this.currentLives = 0;
+          this.currentHealth = 0;
+          this.isDead = true;
+        } else {
+          this.currentHealth = this.maxHealth;
+        }
+      }
+
+      this.updateHUD();
       return this.isDead;
     }
 
     die() {
-      if (!this.isDead) {
-        this.takeDamage(this.currentHealth);
-      }
-
-      this.attackHitbox.setVisible(false);
-      this.attackHitbox.body.setEnable(false);
+      this.clearAttackAnimationCompletion();
+      this.clearHurtAnimationCompletion();
+      this.resetComboState();
+      this.disableAttackHitbox();
+      this.currentHealth = 0;
+      this.currentLives = 0;
+      this.isDead = true;
+      this.canTakeDamage = false;
+      this.updateHUD();
       this.sprite.setVelocity(0, 0);
       this.sprite.body.enable = false;
+      this.setActionState("dead");
       this.sprite.play("hero_death");
     }
   }

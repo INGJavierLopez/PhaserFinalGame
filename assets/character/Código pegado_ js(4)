@@ -1,0 +1,1029 @@
+(function (global) {
+  class Enemy {
+    static DEBUG_TEXTURE_KEY = "enemyDebugTexture";
+
+    static preload(scene) {
+      Enemy.preloadSharedAssets(scene);
+    }
+
+    static preloadSharedAssets(scene) {
+      if (scene.textures.exists(Enemy.DEBUG_TEXTURE_KEY)) {
+        return;
+      }
+
+      const graphics = scene.make.graphics({ x: 0, y: 0, add: false });
+      graphics.fillStyle(0xffffff, 1);
+      graphics.fillRect(0, 0, 2, 2);
+      graphics.generateTexture(Enemy.DEBUG_TEXTURE_KEY, 2, 2);
+      graphics.destroy();
+    }
+
+    static preloadDefinition(scene, definition) {
+      Enemy.preloadSharedAssets(scene);
+
+      const loadedTextureKeys = {};
+      Object.keys(definition.animations).forEach((animationName) => {
+        const animationConfig = definition.animations[animationName];
+        if (
+          !animationConfig
+          || !animationConfig.textureKey
+          || !animationConfig.path
+          || loadedTextureKeys[animationConfig.textureKey]
+          || scene.textures.exists(animationConfig.textureKey)
+        ) {
+          return;
+        }
+
+        scene.load.spritesheet(animationConfig.textureKey, animationConfig.path, {
+          frameWidth: animationConfig.frameWidth,
+          frameHeight: animationConfig.frameHeight
+        });
+        loadedTextureKeys[animationConfig.textureKey] = true;
+      });
+    }
+
+    static buildAnimationKey(definition, animationName) {
+      return definition.key + "_" + animationName;
+    }
+
+    static getScaledDamage(baseDamage, roundNumber, roundDamageBonus) {
+      const currentRound = Math.max(1, roundNumber || 1);
+      const perRoundBonus = Math.max(0, roundDamageBonus || 0);
+      return Math.round(baseDamage + ((currentRound - 1) * perRoundBonus));
+    }
+
+    constructor(scene, group, x, y, config) {
+      const enemyConfig = config || {};
+
+      this.scene = scene;
+      this.group = group;
+      this.definition = this.constructor.getDefinition();
+      this.roundNumber = enemyConfig.roundNumber || 1;
+      this.targetSprite = enemyConfig.targetSprite || null;
+      this.aiEnabled = false;
+      this.state = "idle";
+      this.isDead = false;
+      this.isHurting = false;
+      this.isAttacking = false;
+      this.deathFinalized = false;
+      this.facingDirection = 1;
+      this.lockedAttackDirection = 1;
+      this.lastPlayerAttackIdTaken = null;
+      this.attackRecoveryUntil = 0;
+      this.attackImpactTimer = null;
+      this.attackDeactivateTimer = null;
+      this.attackHitboxOverlap = null;
+      this.animationCompleteHandler = null;
+      this.activeAnimationKey = null;
+      this.activeAttackName = null;
+      this.activeAttackDamageAmount = 0;
+      this.attackHitboxHasConnected = false;
+      this.isPlayerInsideMeleeZone = false;
+      this.isPlayerInsideRangeZone = false;
+      this.attackCooldowns = {
+        attack1: 0,
+        attack2: 0,
+        attack3: 0
+      };
+
+      // ---------------------------------------------------------------------
+      // Simple melee combat configuration
+      //
+      // The existing enemy class contained a much more complex combat system
+      // with multiple attack zones and state transitions.  For the purposes
+      // of this game we replace that behaviour with a straightforward melee
+      // system: when the player enters a rectangular detection area, the
+      // enemy will perform a single melee attack after a brief startup
+      // period.  The dimensions below control how large that detection area
+      // and the attack hitbox should be.  Timings are all in milliseconds.
+      // ---------------------------------------------------------------------
+
+      // Dimensions of the detection (aggro) zone in which the enemy senses
+      // the player.  Adjust these values to tune how far away the player
+      // must be before the enemy begins an attack.
+      this.detectionWidth = 140;
+      this.detectionHeight = 80;
+
+      // Dimensions of the attack hitbox displayed when the enemy swings.
+      this.attackWidth = 50;
+      this.attackHeight = 40;
+
+      // Horizontal offset of the attack hitbox relative to the enemy's
+      // origin.  A positive value places the hitbox in front of the enemy
+      // when facing right and a negative value when facing left.
+      this.attackOffsetX = 40;
+
+      // Attack timing parameters.  attackStartup is the delay before the
+      // attack becomes active, attackActiveTime is how long the hitbox
+      // remains active, and attackCooldown is how long before the enemy
+      // can attack again.
+      this.attackStartup = 250;
+      this.attackActiveTime = 200;
+      this.attackCooldown = 1200;
+
+      // Flags to track the simple melee combat state.
+      // canAttack is true when the enemy is allowed to initiate a new attack;
+      // it becomes false during the attack and cooldown period.  isPlayerInRange
+      // is set each frame when the player overlaps the detection zone.  The
+      // facingRight flag indicates the current horizontal orientation and is
+      // used to offset the hitbox.
+      this.canAttack = true;
+      this.isPlayerInRange = false;
+      this.facingRight = true;
+
+      this.baseDamage = this.definition.stats.baseDamage;
+      this.roundDamageBonus = this.definition.stats.roundDamageBonus || 0;
+      this.currentDamage = Enemy.getScaledDamage(this.baseDamage, this.roundNumber, this.roundDamageBonus);
+      this.maxHealth = this.definition.stats.maxHealth;
+      this.currentHealth = this.maxHealth;
+      this.moveSpeed = this.definition.stats.moveSpeed;
+      this.attackSpeed = this.definition.stats.attackSpeed || 1;
+      this.attackMode = this.definition.attackMode || "melee";
+      this.combatConfig = this.definition.combat || {};
+      this.sharedAttackRecoveryMs = this.combatConfig.sharedAttackRecoveryMs || 450;
+
+      this.ensureAnimations();
+
+      this.sprite = group.create(x, y, this.getTextureKey("idle"), 0);
+      this.sprite.setCollideWorldBounds(true);
+      this.sprite.setData("enemyUnit", this);
+
+      if (this.definition.movement && this.definition.movement.mode === "flying") {
+        this.sprite.body.allowGravity = false;
+      }
+
+      this.configureSpriteBody();
+      //COLLISIONS
+      //this.createDebugZones();
+      //this.syncDebugZones();
+      // =========================
+        // ZONA DE DETECCION
+        // =========================
+        this.detectionZone = this.scene.add.zone(
+            this.sprite.x,
+            this.sprite.y,
+            this.detectionWidth,
+            this.detectionHeight
+        );
+
+        this.scene.physics.add.existing(this.detectionZone);
+        this.detectionZone.body.setAllowGravity(false);
+        this.detectionZone.body.moves = false;
+
+        // =========================
+        // HITBOX DE ATAQUE
+        // =========================
+        this.attackHitbox = this.scene.add.rectangle(
+            this.sprite.x + this.attackOffsetX,
+            this.sprite.y,
+            this.attackWidth,
+            this.attackHeight,
+            0xff0000,
+            0.35
+        );
+
+        this.scene.physics.add.existing(this.attackHitbox);
+        this.attackHitbox.body.setAllowGravity(false);
+        this.attackHitbox.body.moves = false;
+        this.attackHitbox.body.setEnable(false);
+        this.attackHitbox.setVisible(false);
+
+        // =========================
+        // GRAFICOS DE DEPURACION
+        // =========================
+        this.detectionGraphics = this.scene.add.graphics();
+        this.attackGraphics = this.scene.add.graphics();
+
+        // Set up overlap detection for the simple melee system.  We use
+        // `targetSprite` instead of an undefined `player` so that the enemy
+        // responds to whichever sprite was passed in via the constructor.
+        // The detection overlap sets a flag that is cleared each frame in
+        // newCombat().  The attack overlap calls handleHitPlayer when the
+        // active attack hitbox collides with the player.
+        if (this.targetSprite) {
+          this.scene.physics.add.overlap(
+            this.targetSprite,
+            this.detectionZone,
+            () => {
+              this.isPlayerInRange = true;
+            },
+            null,
+            this
+          );
+          this.scene.physics.add.overlap(
+            this.targetSprite,
+            this.attackHitbox,
+            this.handleHitPlayer,
+            null,
+            this
+          );
+        }
+      this.playLoopAnimation("idle");
+    }
+
+    getAnimationConfig(animationName) {
+      return this.definition.animations[animationName] || null;
+    }
+
+    getAnimationKey(animationName) {
+      return Enemy.buildAnimationKey(this.definition, animationName);
+    }
+
+    getTextureKey(animationName) {
+      const animationConfig = this.getAnimationConfig(animationName);
+      return animationConfig ? animationConfig.textureKey : null;
+    }
+
+    ensureAnimations() {
+      Object.keys(this.definition.animations).forEach((animationName) => {
+        const animationConfig = this.definition.animations[animationName];
+        const animationKey = this.getAnimationKey(animationName);
+        if (this.scene.anims.exists(animationKey)) {
+          return;
+        }
+
+        this.scene.anims.create({
+          key: animationKey,
+          frames: this.scene.anims.generateFrameNumbers(animationConfig.textureKey, {
+            start: animationConfig.startFrame || 0,
+            end: animationConfig.endFrame
+          }),
+          frameRate: animationConfig.frameRate,
+          repeat: typeof animationConfig.repeat === "number" ? animationConfig.repeat : 0
+        });
+      });
+    }
+
+    configureSpriteBody() {
+      const bodyConfig = this.definition.body || {};
+
+      if (typeof bodyConfig.width === "number" && typeof bodyConfig.height === "number") {
+        this.sprite.body.setSize(bodyConfig.width, bodyConfig.height, true);
+      }
+
+      if (typeof bodyConfig.offsetX === "number" && typeof bodyConfig.offsetY === "number") {
+        this.sprite.body.setOffset(bodyConfig.offsetX, bodyConfig.offsetY);
+      }
+    }
+
+    createDebugZone(zoneConfig, tint, alpha, visible) {
+      const zone = this.scene.physics.add.sprite(this.sprite.x, this.sprite.y, Enemy.DEBUG_TEXTURE_KEY);
+      zone.setDisplaySize(Math.max(2, zoneConfig.width || 2), Math.max(2, zoneConfig.height || 2));
+      zone.setTint(tint);
+      zone.setAlpha(alpha);
+      zone.setVisible(visible);
+      zone.setDepth(15);
+      zone.body.allowGravity = false;
+      zone.body.moves = false;
+      zone.body.immovable = true;
+      zone.body.setSize(Math.max(2, zoneConfig.width || 2), Math.max(2, zoneConfig.height || 2), true);
+      zone.body.setEnable(true);
+      return zone;
+    }
+
+    createDebugZones() {
+      // Keep both cast zones visible so their positions remain easy to debug.
+      this.meleeTrigger = this.createDebugZone(this.definition.sensors.melee, 0xff5f5f, 0.2, true);
+      //this.rangeTrigger = this.createDebugZone(this.definition.sensors.range, 0x4da6ff, 0.16, true);
+      this.activeAttackHitbox = this.createDebugZone({ width: 8, height: 8 }, 0xffe066, 0.3, false);
+      this.activeAttackHitbox.body.setEnable(false);
+    }
+
+    syncZonePosition(zone, zoneConfig, direction) {
+      const offsetX = zoneConfig.offsetX || 0;
+      const offsetY = zoneConfig.offsetY || 0;
+      zone.setPosition(
+        this.sprite.x + (offsetX * direction),
+        this.sprite.y + offsetY
+      );
+      zone.setDisplaySize(Math.max(2, zoneConfig.width || 2), Math.max(2, zoneConfig.height || 2));
+      zone.body.setSize(Math.max(2, zoneConfig.width || 2), Math.max(2, zoneConfig.height || 2), true);
+
+      if (typeof zone.body.updateFromGameObject === "function") {
+        zone.body.updateFromGameObject();
+      }
+    }
+
+    syncDebugZones() {
+      if (!this.sprite || !this.sprite.active) {
+        return;
+      }
+
+      const direction = this.isAttacking ? this.lockedAttackDirection : this.facingDirection;
+      this.syncZonePosition(this.meleeTrigger, this.definition.sensors.melee, direction);
+      this.syncZonePosition(this.rangeTrigger, this.definition.sensors.range, direction);
+
+      if (this.activeAttackHitbox.visible && this.activeAttackHitbox.body.enable) {
+        if (typeof this.activeAttackHitbox.body.updateFromGameObject === "function") {
+          this.activeAttackHitbox.body.updateFromGameObject();
+        }
+      }
+    }
+
+    clearAnimationCompletion() {
+      if (this.sprite && this.activeAnimationKey && this.animationCompleteHandler) {
+        this.sprite.off("animationcomplete-" + this.activeAnimationKey, this.animationCompleteHandler, this);
+      }
+
+      this.activeAnimationKey = null;
+      this.animationCompleteHandler = null;
+    }
+
+    clearAttackTimers() {
+      if (this.attackImpactTimer) {
+        this.attackImpactTimer.remove(false);
+        this.attackImpactTimer = null;
+      }
+
+      if (this.attackDeactivateTimer) {
+        this.attackDeactivateTimer.remove(false);
+        this.attackDeactivateTimer = null;
+      }
+    }
+
+    clearAttackHitboxOverlap() {
+      if (this.attackHitboxOverlap) {
+        this.attackHitboxOverlap.destroy();
+        this.attackHitboxOverlap = null;
+      }
+    }
+
+    hideActiveAttackHitbox() {
+      this.clearAttackTimers();
+      this.clearAttackHitboxOverlap();
+
+      if (!this.activeAttackHitbox) {
+        return;
+      }
+
+      this.activeAttackName = null;
+      this.activeAttackDamageAmount = 0;
+      this.attackHitboxHasConnected = false;
+      this.activeAttackHitbox.setVisible(false);
+      this.activeAttackHitbox.body.setEnable(false);
+    }
+
+    clearAttackState() {
+      this.isAttacking = false;
+      if (this.state === "attacking") {
+        this.state = "idle";
+      }
+      this.hideActiveAttackHitbox();
+    }
+
+    stopBodyMovement() {
+      if (!this.sprite || !this.sprite.active) {
+        return;
+      }
+
+      this.sprite.setVelocityX(0);
+      if (this.definition.movement && this.definition.movement.mode === "flying") {
+        this.sprite.setVelocityY(0);
+      }
+    }
+
+    playLoopAnimation(animationName) {
+      if (!this.sprite || !this.sprite.active) {
+        return;
+      }
+
+      const animationKey = this.getAnimationKey(animationName);
+      if (this.sprite.anims.currentAnim && this.sprite.anims.currentAnim.key === animationKey) {
+        return;
+      }
+
+      this.sprite.play(animationKey, true);
+    }
+
+    playSingleAnimation(animationName, onComplete) {
+      const animationKey = this.getAnimationKey(animationName);
+      this.clearAnimationCompletion();
+      this.sprite.play(animationKey, true);
+      this.activeAnimationKey = animationKey;
+      this.animationCompleteHandler = onComplete;
+      this.sprite.once("animationcomplete-" + animationKey, onComplete, this);
+    }
+
+    setFacingDirection(nextDirection) {
+      if (nextDirection === 0) {
+        return;
+      }
+
+      this.facingDirection = nextDirection > 0 ? 1 : -1;
+      this.sprite.setFlipX(this.facingDirection < 0);
+    }
+
+    updateFacingFromTarget() {
+      if (!this.targetSprite || !this.targetSprite.active || this.isAttacking) {
+        return;
+      }
+
+      const distanceToTargetX = this.targetSprite.x - this.sprite.x;
+      if (Math.abs(distanceToTargetX) < 2) {
+        return;
+      }
+
+      this.setFacingDirection(Math.sign(distanceToTargetX));
+    }
+
+    faceTargetNow() {
+      if (!this.targetSprite || !this.targetSprite.active) {
+        return;
+      }
+
+      const directionToTarget = Math.sign(this.targetSprite.x - this.sprite.x) || this.facingDirection;
+      this.setFacingDirection(directionToTarget);
+    }
+
+    isAttackReady(attackName) {
+      return this.scene.time.now >= (this.attackCooldowns[attackName] || 0);
+    }
+
+    getAssignedAttackName(zoneType) {
+      if (zoneType === "melee") {
+        if (this.isAttackReady("attack2")) {
+          return "attack2";
+        }
+
+        if (this.isAttackReady("attack1")) {
+          return "attack1";
+        }
+
+        return null;
+      }
+
+      if (zoneType === "range" && this.isAttackReady("attack3")) {
+        return "attack3";
+      }
+
+      return null;
+    }
+
+    canHandleAttackZone(zoneType) {
+      return (
+        this.aiEnabled
+        && !this.isDead
+        && !this.isHurting
+        && !this.isAttacking
+        && !!this.targetSprite
+        && this.targetSprite.active
+        && this.attackMode === zoneType
+        && this.scene.time.now >= this.attackRecoveryUntil
+      );
+    }
+
+    tryAttackFromZone(zoneType) {
+      console.log(`Enemy ${this.definition.key} trying to attack from ${zoneType} zone...`);
+      if (!this.canHandleAttackZone(zoneType)) {
+        return;
+      }
+
+      const attackName = this.getAssignedAttackName(zoneType);
+      if (!attackName) {
+        return;
+      }
+
+      // Lock the current facing before the cast so the attack uses the player's current side.
+      this.faceTargetNow();
+      this.startAttack(attackName);
+    }
+
+    updateZoneOverlapState(zoneType, isOverlappingNow) {
+      const overlapStateKey = zoneType === "range" ? "isPlayerInsideRangeZone" : "isPlayerInsideMeleeZone";
+      const wasOverlapping = this[overlapStateKey];
+
+      this[overlapStateKey] = isOverlappingNow;
+
+      // Only fire the handler when the player enters the zone, not every physics step while staying inside.
+      if (!wasOverlapping && isOverlappingNow) {
+        if (zoneType === "range") {
+          this.RangeOverlapHandle();
+        } else {
+          this.MeleeOverlapHandle();
+        }
+      }
+    }
+
+    getBodyBounds(gameObject, shouldSyncFromGameObject) {
+      if (!gameObject || !gameObject.body || !gameObject.body.enable) {
+        return null;
+      }
+
+      if (shouldSyncFromGameObject && typeof gameObject.body.updateFromGameObject === "function") {
+        gameObject.body.updateFromGameObject();
+      }
+
+      return new Phaser.Geom.Rectangle(
+        gameObject.body.x,
+        gameObject.body.y,
+        gameObject.body.width,
+        gameObject.body.height
+      );
+    }
+
+    isTargetBodyOverlappingZone(zone) {
+      if (!this.targetSprite || !this.targetSprite.active || !zone) {
+        return false;
+      }
+
+      const targetBounds = this.getBodyBounds(this.targetSprite, false);
+      const zoneBounds = this.getBodyBounds(zone, true);
+
+      if (!targetBounds || !zoneBounds) {
+        return false;
+      }
+
+      // Compare Arcade body bounds directly so the cast zones use the player's real collision box.
+      return Phaser.Geom.Intersects.RectangleToRectangle(targetBounds, zoneBounds);
+    }
+
+    checkAttackZoneOverlaps() {
+      if (!this.targetSprite || !this.targetSprite.active) {
+        this.isPlayerInsideMeleeZone = false;
+        this.isPlayerInsideRangeZone = false;
+        return;
+      }
+
+      // Read overlap from body bounds instead of sprite-level overlap to avoid false positives from display size or transforms.
+      const isOverlappingMelee = this.isTargetBodyOverlappingZone(this.meleeTrigger);
+      const isOverlappingRange = this.isTargetBodyOverlappingZone(this.rangeTrigger);
+
+      // Update the overlap states after checking both zones so the enemy can react to both simultaneously if needed.
+      this.updateZoneOverlapState("melee", isOverlappingMelee);
+      this.updateZoneOverlapState("range", isOverlappingRange);
+    }
+
+    MeleeOverlapHandle() {
+      this.tryAttackFromZone("melee");
+    }
+
+    RangeOverlapHandle() {
+      this.tryAttackFromZone("range");
+    }
+
+    isPlayerInsideAssignedZone() {
+      if (!this.targetSprite || !this.targetSprite.active) {
+        return false;
+      }
+
+      const assignedZone = this.attackMode === "range" ? this.rangeTrigger : this.meleeTrigger;
+      return this.isTargetBodyOverlappingZone(assignedZone);
+    }
+
+    chaseTarget() {
+      if (!this.targetSprite || !this.targetSprite.active) {
+        this.stopBodyMovement();
+        this.playLoopAnimation("idle");
+        return;
+      }
+
+      const movementConfig = this.definition.movement || {};
+      const stopDistance = movementConfig.stopDistance || 24;
+      const distanceToTargetX = this.targetSprite.x - this.sprite.x;
+
+      if (movementConfig.mode === "flying") {
+        const desiredY = this.targetSprite.y + (movementConfig.verticalOffset || 0);
+        const directionVector = new Phaser.Math.Vector2(distanceToTargetX, desiredY - this.sprite.y);
+
+        if (directionVector.lengthSq() <= (stopDistance * stopDistance)) {
+          this.stopBodyMovement();
+          this.playLoopAnimation("idle");
+          return;
+        }
+
+        directionVector.normalize().scale(this.moveSpeed);
+        this.sprite.setVelocity(directionVector.x, directionVector.y);
+        this.playLoopAnimation("walk");
+        return;
+      }
+
+      if (Math.abs(distanceToTargetX) <= stopDistance) {
+        this.sprite.setVelocityX(0);
+        this.playLoopAnimation("idle");
+        return;
+      }
+
+      this.sprite.setVelocityX(Math.sign(distanceToTargetX) * this.moveSpeed);
+      this.playLoopAnimation("walk");
+    }
+
+    getScaledAttackTiming(baseMs) {
+      return Math.max(40, Math.round(baseMs / this.attackSpeed));
+    }
+
+    computeFrameTime(animationConfig, frameIndexInclusive) {
+      const totalFrames = (animationConfig.endFrame - (animationConfig.startFrame || 0)) + 1;
+      const clampedFrames = Phaser.Math.Clamp(frameIndexInclusive, 1, totalFrames);
+      return this.getScaledAttackTiming((clampedFrames / animationConfig.frameRate) * 1000);
+    }
+
+    showAttackHitbox(attackConfig) {
+      const hitboxConfig = attackConfig.hitbox || this.definition.sensors.melee;
+      const direction = this.lockedAttackDirection;
+
+      this.activeAttackHitbox.setDisplaySize(hitboxConfig.width, hitboxConfig.height);
+      this.activeAttackHitbox.body.setSize(hitboxConfig.width, hitboxConfig.height, true);
+      this.activeAttackHitbox.setPosition(
+        this.sprite.x + ((hitboxConfig.offsetX || 0) * direction),
+        this.sprite.y + (hitboxConfig.offsetY || 0)
+      );
+      this.activeAttackHitbox.setVisible(true);
+      this.activeAttackHitbox.body.setEnable(true);
+
+      if (typeof this.activeAttackHitbox.body.updateFromGameObject === "function") {
+        this.activeAttackHitbox.body.updateFromGameObject();
+      }
+    }
+
+    handleAttackHitboxOverlap() {
+      if (
+        this.attackHitboxHasConnected
+        || !this.activeAttackHitbox
+        || !this.activeAttackHitbox.body.enable
+        || !this.targetSprite
+        || !this.targetSprite.active
+      ) {
+        return;
+      }
+
+      this.attackHitboxHasConnected = true;
+      if (typeof this.scene.handleEnemyAttackHit === "function") {
+        this.scene.handleEnemyAttackHit(this, this.activeAttackName, this.activeAttackDamageAmount);
+      }
+    }
+
+    activateAttackHitbox(attackName, attackConfig) {
+      if (
+        !this.sprite
+        || !this.sprite.active
+        || this.isDead
+        || !this.targetSprite
+        || !this.targetSprite.active
+      ) {
+        return;
+      }
+
+      this.showAttackHitbox(attackConfig);
+      this.activeAttackName = attackName;
+      this.activeAttackDamageAmount = Math.max(1, Math.round(this.currentDamage * (attackConfig.damageMultiplier || 1)));
+      this.attackHitboxHasConnected = false;
+
+      // Keep a temporary overlap active during the hit window so damage only happens on real contact.
+      this.attackHitboxOverlap = this.scene.physics.add.overlap(
+        this.activeAttackHitbox,
+        this.targetSprite,
+        this.handleAttackHitboxOverlap,
+        null,
+        this
+      );
+
+      const activeFrames = Math.max(1, attackConfig.activeFrames || 1);
+      const activeDurationMs = this.getScaledAttackTiming((activeFrames / attackConfig.frameRate) * 1000);
+      this.attackDeactivateTimer = this.scene.time.delayedCall(activeDurationMs, () => {
+        this.attackDeactivateTimer = null;
+        this.hideActiveAttackHitbox();
+      });
+    }
+
+    startAttack(attackName) {
+      const attackConfig = this.getAnimationConfig(attackName);
+      if (!attackConfig || this.isDead || this.isHurting || this.isAttacking) {
+        return;
+      }
+
+      this.state = "attacking";
+      this.isAttacking = true;
+      this.lockedAttackDirection = this.facingDirection;
+      this.stopBodyMovement();
+      this.hideActiveAttackHitbox();
+
+      if (attackConfig.cooldownMs) {
+        this.attackCooldowns[attackName] = this.scene.time.now + this.getScaledAttackTiming(attackConfig.cooldownMs);
+      }
+
+      const castFrame = typeof attackConfig.impactFrame === "number"
+        ? attackConfig.impactFrame - (attackConfig.startFrame || 0) + 1
+        : 1;
+      const castTimeMs = this.computeFrameTime(attackConfig, castFrame);
+
+      this.attackImpactTimer = this.scene.time.delayedCall(castTimeMs, () => {
+        this.attackImpactTimer = null;
+        if (!this.isAttacking || this.isDead) {
+          return;
+        }
+
+        this.activateAttackHitbox(attackName, attackConfig);
+      });
+
+      this.playSingleAnimation(attackName, () => {
+        this.clearAnimationCompletion();
+        if (this.isDead || this.state !== "attacking") {
+          return;
+        }
+
+        this.attackRecoveryUntil = this.scene.time.now + this.getScaledAttackTiming(
+          attackConfig.recoveryMs || this.sharedAttackRecoveryMs
+        );
+        this.clearAttackState();
+
+        if (this.aiEnabled) {
+          this.playLoopAnimation("idle");
+
+          // Recheck the assigned zone after finishing the cast so the enemy can attack again if the player stayed inside.
+          if (this.isPlayerInsideAssignedZone()) {
+            this.tryAttackFromZone(this.attackMode);
+          }
+        }
+      });
+    }
+
+    enterHurtState() {
+      this.clearAttackTimers();
+      this.hideActiveAttackHitbox();
+      this.isAttacking = false;
+      this.isHurting = true;
+      this.state = "hurt";
+      this.stopBodyMovement();
+
+      this.playSingleAnimation("takeHit", () => {
+        this.clearAnimationCompletion();
+        if (this.isDead || this.state !== "hurt") {
+          return;
+        }
+
+        this.isHurting = false;
+        this.state = "idle";
+        if (this.aiEnabled) {
+          this.playLoopAnimation("idle");
+        }
+      });
+    }
+
+    finalizeDeath() {
+      if (this.deathFinalized) {
+        return;
+      }
+
+      this.deathFinalized = true;
+
+      if (this.meleeTrigger) {
+        this.meleeTrigger.destroy();
+        this.meleeTrigger = null;
+      }
+
+      if (this.rangeTrigger) {
+        this.rangeTrigger.destroy();
+        this.rangeTrigger = null;
+      }
+
+      if (this.activeAttackHitbox) {
+        this.activeAttackHitbox.destroy();
+        this.activeAttackHitbox = null;
+      }
+
+      if (this.sprite && this.sprite.active) {
+        this.sprite.disableBody(true, true);
+      }
+
+      if (this.scene && typeof this.scene.handleEnemyDefeated === "function") {
+        this.scene.handleEnemyDefeated(this);
+      }
+    }
+
+    die() {
+      if (this.isDead) {
+        return;
+      }
+
+      this.isDead = true;
+      this.isHurting = false;
+      this.aiEnabled = false;
+      this.state = "dead";
+      this.clearAnimationCompletion();
+      this.hideActiveAttackHitbox();
+      this.stopBodyMovement();
+      this.sprite.body.enable = false;
+
+      this.playSingleAnimation("death", () => {
+        this.clearAnimationCompletion();
+        this.finalizeDeath();
+      });
+    }
+
+    takeDamageFromPlayer(damageAmount, attackId) {
+      if (this.isDead) {
+        return false;
+      }
+
+      if (typeof attackId === "number" && this.lastPlayerAttackIdTaken === attackId) {
+        return false;
+      }
+
+      this.lastPlayerAttackIdTaken = attackId;
+      this.currentHealth = Math.max(0, this.currentHealth - Math.max(1, Math.round(damageAmount || 1)));
+
+      if (this.currentHealth <= 0) {
+        this.die();
+        return true;
+      }
+
+      this.enterHurtState();
+      return true;
+    }
+
+    newCombat()
+    {
+      // Skip combat logic if the enemy or target sprite are inactive.
+      if (!this.sprite || !this.sprite.active || !this.targetSprite || !this.targetSprite.active) {
+        return;
+      }
+
+      // Determine the horizontal orientation based on the player's position.
+      // facingRight is true when the player is to the right of the enemy.
+      if (this.targetSprite.x < this.sprite.x) {
+        this.facingRight = false;
+        this.facingDirection = -1;
+      } else {
+        this.facingRight = true;
+        this.facingDirection = 1;
+      }
+
+      // Update the sprite flip so the enemy visually faces the player.
+      this.sprite.setFlipX(!this.facingRight);
+
+      // Reposition the detection zone to follow the enemy.
+      this.detectionZone.x = this.sprite.x;
+      this.detectionZone.y = this.sprite.y;
+      if (this.detectionZone.body && typeof this.detectionZone.body.updateFromGameObject === 'function') {
+        this.detectionZone.body.updateFromGameObject();
+      }
+
+      // Reposition the attack hitbox relative to the enemy and its facing.
+      const offsetX = this.facingRight ? this.attackOffsetX : -this.attackOffsetX;
+      this.attackHitbox.x = this.sprite.x + offsetX;
+      this.attackHitbox.y = this.sprite.y;
+      if (this.attackHitbox.body && typeof this.attackHitbox.body.updateFromGameObject === 'function') {
+        this.attackHitbox.body.updateFromGameObject();
+      }
+
+      // Reset the in-range flag; overlap callbacks will set it if the
+      // target enters the detection zone.  We also perform a manual overlap
+      // check here to ensure responsiveness even if no callback has fired.
+      this.isPlayerInRange = false;
+      if (this.scene.physics.overlap(this.targetSprite, this.detectionZone)) {
+        this.isPlayerInRange = true;
+      }
+
+      // Calculate distance as a fallback in case the overlap fails.  This
+      // ensures the enemy can still attack if the player comes within a
+      // reasonable proximity but misses the detection bounds slightly.
+      const dist = Phaser.Math.Distance.Between(
+        this.sprite.x,
+        this.sprite.y,
+        this.targetSprite.x,
+        this.targetSprite.y
+      );
+
+      // Initiate an attack when the player is in range or close enough and
+      // the enemy isn't already attacking or on cooldown.
+      if (this.canAttack && !this.isAttacking && (this.isPlayerInRange || dist <= 90)) {
+        this.startAttack();
+      }
+
+      // Draw visual debugging rectangles around the detection zone and
+      // attack hitbox.  These overlays make it easy to see the current
+      // positions and sizes of the combat areas during development.
+      this.drawDebug();
+    }
+    startAttack() {
+        if (!this.canAttack || this.isAttacking) return;
+
+        this.isAttacking = true;
+        this.canAttack = false;
+
+        // Aquí podrías reproducir animación de ataque
+        // this.sprite.play("enemyAttack", true);
+
+        // Startup del ataque
+        this.scene.time.delayedCall(this.attackStartup, () => {
+            if (!this.sprite.active) return;
+
+            this.attackHitbox.setVisible(true);
+            this.attackHitbox.body.setEnable(true);
+
+            // Tiempo activo del golpe
+            this.scene.time.delayedCall(this.attackActiveTime, () => {
+                if (!this.sprite.active) return;
+
+                this.attackHitbox.setVisible(false);
+                this.attackHitbox.body.setEnable(false);
+            });
+        });
+
+        // Fin de animación / recovery
+        this.scene.time.delayedCall(this.attackStartup + this.attackActiveTime + 200, () => {
+            if (!this.sprite.active) return;
+            this.isAttacking = false;
+        });
+
+        // Cooldown
+        this.scene.time.delayedCall(this.attackCooldown, () => {
+            if (!this.sprite.active) return;
+            this.canAttack = true;
+        });
+    }
+
+    handleHitPlayer(player, hitbox) {
+        console.log("El jugador recibió un golpe del enemigo");
+
+        // Aquí luego puedes poner daño, knockback, invulnerabilidad, etc.
+        // Ejemplo:
+        // player.takeDamage(10);
+    }
+
+    drawDebug() {
+        // Detección
+        this.detectionGraphics.clear();
+        this.detectionGraphics.lineStyle(2, 0x00ff00, 1);
+        this.detectionGraphics.strokeRect(
+            this.detectionZone.x - this.detectionWidth / 2,
+            this.detectionZone.y - this.detectionHeight / 2,
+            this.detectionWidth,
+            this.detectionHeight
+        );
+
+        // Hitbox de ataque
+        this.attackGraphics.clear();
+        this.attackGraphics.lineStyle(2, 0xff0000, 1);
+        this.attackGraphics.strokeRect(
+            this.attackHitbox.x - this.attackWidth / 2,
+            this.attackHitbox.y - this.attackHeight / 2,
+            this.attackWidth,
+            this.attackHeight
+        );
+    }
+    update(targetSprite) {
+      // If a new target sprite is provided, update the stored reference so
+      // subsequent frames will track it.  This allows the game loop to
+      // supply the player's sprite on each call without rebuilding the
+      // overlap handlers.
+      if (targetSprite) {
+        this.targetSprite = targetSprite;
+      }
+      // Use the simplified melee combat system instead of the original AI.
+      this.newCombat();
+      return;
+      if (!this.sprite || !this.sprite.active || this.isDead) {
+        return;
+      }
+
+      if (targetSprite) {
+        this.targetSprite = targetSprite;
+      }
+      // Always update facing direction towards the target each frame so the enemy can react to the player's movement even while performing other actions.
+      this.updateFacingFromTarget();
+      // Sync debug zone positions every frame since they don't automatically follow the sprite and it's important for them to be accurate for debugging purposes.
+      this.syncDebugZones();
+      // Check for overlaps with the attack zones every frame so the enemy can react immediately when the player enters them, even if the enemy is currently performing another action.
+
+      if (!this.aiEnabled || !this.targetSprite || !this.targetSprite.active) {
+        this.stopBodyMovement();
+        if (!this.isHurting && !this.isAttacking) {
+          this.playLoopAnimation("idle");
+        }
+        return;
+      }
+
+      if (this.isHurting || this.isAttacking) {
+        return;
+      }
+
+      this.chaseTarget();
+    }
+
+    startMoving() {
+      if (this.isDead) {
+        return;
+      }
+
+      this.aiEnabled = true;
+    }
+
+    stopMoving() {
+      this.aiEnabled = false;
+      this.stopBodyMovement();
+
+      if (!this.isDead && !this.isHurting && !this.isAttacking) {
+        this.playLoopAnimation("idle");
+      }
+    }
+
+    destroy() {
+      this.clearAnimationCompletion();
+      this.hideActiveAttackHitbox();
+      this.finalizeDeath();
+    }
+  }
+
+  global.Enemy = Enemy;
+})(window);
