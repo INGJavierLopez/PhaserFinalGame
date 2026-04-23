@@ -1,4 +1,6 @@
 (function (global) {
+  //instance parameters: scene, group, x, y, config
+    
   class Enemy {
     static DEBUG_TEXTURE_KEY = "enemyDebugTexture";
 
@@ -54,12 +56,21 @@
 
     constructor(scene, group, x, y, config) {
       const enemyConfig = config || {};
+      const enemyDebugConfig = enemyConfig.debugMode || {};
 
       this.scene = scene;
       this.group = group;
       this.definition = this.constructor.getDefinition();
       this.roundNumber = enemyConfig.roundNumber || 1;
       this.targetSprite = enemyConfig.targetSprite || null;
+      this.debugMode = {
+        bEnemyCanChase: typeof enemyDebugConfig.bEnemyCanChase === "boolean"
+          ? enemyDebugConfig.bEnemyCanChase
+          : true,
+        bEnemyCanAttack: typeof enemyDebugConfig.bEnemyCanAttack === "boolean"
+          ? enemyDebugConfig.bEnemyCanAttack
+          : true
+      };
       this.aiEnabled = false;
       this.state = "idle";
       this.isDead = false;
@@ -69,7 +80,6 @@
       this.facingDirection = 1;
       this.lockedAttackDirection = 1;
       this.lastPlayerAttackIdTaken = null;
-      this.attackRecoveryUntil = 0;
 
       this.canAttack = true;
       this.attackWindupTimer = null;
@@ -96,7 +106,7 @@
         attack2: 0,
         attack3: 0
       };
-
+      // stats
       this.baseDamage = this.definition.stats.baseDamage;
       this.roundDamageBonus = this.definition.stats.roundDamageBonus || 0;
       this.currentDamage = Enemy.getScaledDamage(this.baseDamage, this.roundNumber, this.roundDamageBonus);
@@ -104,10 +114,19 @@
       this.currentHealth = this.maxHealth;
       this.moveSpeed = this.definition.stats.moveSpeed;
       this.attackSpeed = this.definition.stats.attackSpeed || 1;
-      this.attackMode = this.definition.attackMode || "melee";
-      this.combatConfig = this.definition.combat || {};
 
+      // combat config
+      this.combatConfig = this.definition.combatConfig || {};
+
+      //overlapZones
+      this.MeleeOverlapZone = null;
+      this.RangeOverlapZone = null;
+      this.meleeHitBoxConfig = this.definition.meleeHitBoxConfig || {};
+      this.meleeTriggerConfig = this.definition.meleeTriggerConfig || {};
+      this.rangeTriggerConfig = this.definition.rangeTriggerConfig || {};
+      this.movementConfig = this.definition.movement || {};
       this.attackHitbox = this.scene.physics.add.sprite(x, y, "attackTexture");
+      this.attackHitbox.setSize(this.meleeHitBoxConfig.width || 20, this.meleeHitBoxConfig.height || 20);
       this.attackHitbox.setVisible(false);
       this.attackHitbox.body.allowGravity = false;
       this.attackHitbox.body.setEnable(false);
@@ -123,6 +142,8 @@
       }
 
       this.configureSpriteBody();
+      this.hud = new EnemyHUD(this.scene, this);
+      this.hud.create(this.currentHealth, this.maxHealth);
       this.createOverlapZones();
       this.playLoopAnimation("idle");
     }
@@ -130,32 +151,80 @@
     createOverlapZones()
     {
       this.overlapZones = [];
-      //Crear MeleZone con las mismas propiedades que this.meleeTrigger, con su misma visualizacion para que sea mas facil de debuggear, y asignarla a this.meleeTrigger
+      // create overlap zones for melee and range attacks based on config, if the combat type includes them. 
+      // These zones will be used to detect when the player is in range to start an attack. 
+      // They will be invisible and will follow the enemy's position with their respective offsets.
+      if(this.combatConfig.combatType.includes("melee"))
+      {
+      this.MeleeOverlapZone = this.scene.add.zone(this.sprite.x, this.sprite.y, this.meleeTriggerConfig.width, this.meleeTriggerConfig.height);
+      this.MeleeOverlapZone.setPosition(this.sprite.x + this.meleeTriggerConfig.offsetX, this.sprite.y + this.meleeTriggerConfig.offsetY);
+  
+      this.overlapZones.push(this.MeleeOverlapZone);
+      this.scene.physics.add.existing(this.MeleeOverlapZone);
+      this.MeleeOverlapZone.body.setAllowGravity(false);
+      this.MeleeOverlapZone.body.setImmovable(true);
+      this.MeleeOverlapZone.body.setEnable(true);
+      }
+      if(this.combatConfig.combatType.includes("range"))
+      {
+      this.RangeOverlapZone = this.scene.add.zone(this.sprite.x, this.sprite.y, this.rangeTriggerConfig.width, this.rangeTriggerConfig.height);
+      this.RangeOverlapZone.setPosition(this.sprite.x + this.rangeTriggerConfig.offsetX, this.sprite.y + this.rangeTriggerConfig.offsetY);
+      this.overlapZones.push(this.RangeOverlapZone);
+      this.scene.physics.add.existing(this.RangeOverlapZone);
+      this.RangeOverlapZone.body.setAllowGravity(false);
+      this.RangeOverlapZone.body.setImmovable(true);
+      this.RangeOverlapZone.body.setEnable(true);
+      }
       
-      const meleeZone = this.scene.add.zone(this.sprite.x, this.sprite.y, 100,100);
-      this.overlapZones.push(meleeZone);
-      this.scene.physics.add.existing(meleeZone);
-      meleeZone.body.setAllowGravity(false);
-      meleeZone.body.setImmovable(true);
-      meleeZone.body.setEnable(true);
       
     }
+    // check if player is inside melee or range overlap zones, if yes, start respective attack
     checkOverlapZones()
     {
-      if (!this.targetSprite || !this.targetSprite.active) {
+      if (
+        !this.aiEnabled
+        || !this.debugMode.bEnemyCanAttack
+        || !this.targetSprite
+        || !this.targetSprite.active
+      ) {
         return;
       }
-      this.overlapZones.forEach((zone) => {
-        const isOverlapping = this.scene.physics.world.overlap(zone, this.targetSprite);
-        if (isOverlapping) {
-          this.startAttack("attack1");
-          console.log(`Enemy ${this.definition.key} is overlapping with the player in zone at (${zone.x}, ${zone.y})`);
-        }
-      });
+      this.CheckMeleeOverlapZone();
+      this.CheckRangeOverlapZone();
 
+
+      
     }
+    // check if player is inside melee overlap zone, if yes, start melee attack
+    CheckMeleeOverlapZone() {
+        if (this.combatConfig.combatType.includes("melee") && this.MeleeOverlapZone) {
+          const isMeleeOverlaping = this.scene.physics.world.overlap(this.MeleeOverlapZone, this.targetSprite);
+          if (isMeleeOverlaping) {
+            console.log("Player is in melee zone");
+            this.startAttack("attack1");
+          }
+        }
+      }
+    // check if player is inside range overlap zone, if yes, start range attack
+    CheckRangeOverlapZone(){
+      if(this.combatConfig.combatType.includes("range") && this.RangeOverlapZone)
+      {
+        const isRangeOverlaping = this.scene.physics.world.overlap(this.RangeOverlapZone, this.targetSprite);
+        if(isRangeOverlaping)
+        {
+          console.log("Player is in range zone");
+          this.startAttack("attack1");
+        }
+      }
+    }
+
     UpdateOverlapZonesLocation()
     {
+      // get valid overlap zones (melee and range) and update their position to match the enemy's position + their respective offsets
+      let overlapZones =[];
+      overlapZones.push(this.MeleeOverlapZone ? this.MeleeOverlapZone : null);
+      overlapZones.push(this.RangeOverlapZone ? this.RangeOverlapZone : null);
+      // update position of overlap zones to match the enemy's position + their respective offsets
       this.overlapZones.forEach((zone) => {
         zone.setPosition(this.sprite.x, this.sprite.y);
         if (typeof zone.body.updateFromGameObject === "function") {
@@ -164,6 +233,36 @@
       });
 
     }
+    //TIMERS
+    /**
+     * @param {() => void} startHandler - Function executed when the timer starts
+     * @param {number} durationSeconds - Duration in seconds (floats allowed)
+     * @param {() => void} finishHandler - Function executed when the timer ends
+     * @param {boolean} loop - Whether the timer should repeat
+     */
+    CreateTimer(startHandler, durationSeconds, finishHandler, loop = false) {
+    // startHandler: function executed immediately when the timer is created
+    // durationSeconds: duration in seconds, can be a float (.5, 1, 2.5)
+    // finishHandler: function executed when the timer completes
+    // loop: whether the timer repeats or not
+
+      if (typeof startHandler === "function") {
+          startHandler();
+      }
+
+      const timer = this.time.addEvent({
+          delay: durationSeconds * 1000,
+          callback: () => {
+              if (typeof finishHandler === "function") {
+                  finishHandler();
+              }
+          },
+          callbackScope: this,
+          loop: loop
+      });
+
+      return timer;
+  }
     getAnimationConfig(animationName) {
       return this.definition.animations[animationName] || null;
     }
@@ -311,7 +410,7 @@
 
 
     chaseTarget() {
-      if (!this.targetSprite || !this.targetSprite.active) {
+      if (!this.debugMode.bEnemyCanChase || !this.targetSprite || !this.targetSprite.active) {
         this.stopBodyMovement();
         this.playLoopAnimation("idle");
         return;
@@ -350,7 +449,15 @@
 
     startAttack(attackName) {
       const attackConfig = this.getAnimationConfig(attackName);
-      if (!attackConfig || this.isDead || this.isHurting || this.isAttacking || !this.canAttack) {
+      if (
+        !attackConfig
+        || this.isDead
+        || this.isHurting
+        || this.isAttacking
+        || !this.canAttack
+        || !this.aiEnabled
+        || !this.debugMode.bEnemyCanAttack
+      ) {
         return;
       }
 
@@ -396,11 +503,9 @@
           return;
         }
 
-        const hitboxConfig = attackConfig.hitbox || {};
-        hitboxConfig.offsetX = 40;
         this.attackHitbox.setPosition(
-          this.sprite.x + ((hitboxConfig.offsetX || 0) * this.lockedAttackDirection),
-          this.sprite.y + (hitboxConfig.offsetY || 0)
+          this.sprite.x + ((this.meleeHitBoxConfig.offsetX || 0) * this.lockedAttackDirection),
+          this.sprite.y + (this.meleeHitBoxConfig.offsetY || 0)
         );
 
         this.attackHitbox.setVisible(true);
@@ -500,6 +605,11 @@
 
       this.deathFinalized = true;
 
+      if (this.hud) {
+        this.hud.destroy();
+        this.hud = null;
+      }
+
       if (this.meleeTrigger) {
         this.meleeTrigger.destroy();
         this.meleeTrigger = null;
@@ -537,6 +647,9 @@
       this.hideActiveAttackHitbox();
       this.stopBodyMovement();
       this.sprite.body.enable = false;
+      if (this.hud) {
+        this.hud.update();
+      }
 
       this.playSingleAnimation("death", () => {
         this.clearAnimationCompletion();
@@ -555,6 +668,9 @@
 
       this.lastPlayerAttackIdTaken = attackId;
       this.currentHealth = Math.max(0, this.currentHealth - Math.max(1, Math.round(damageAmount || 1)));
+      if (this.hud) {
+        this.hud.updateHealth(this.currentHealth, this.maxHealth);
+      }
 
       if (this.currentHealth <= 0) {
         this.die();
@@ -573,14 +689,14 @@
       if (targetSprite) {
         this.targetSprite = targetSprite;
       }
-      // Always update facing direction towards the target each frame so the enemy can react to the player's movement even while performing other actions.
+      if (this.hud) {
+        this.hud.update();
+      }
+      // actualizar dirección a la que mira el enemigo según la posición del jugador
       this.updateFacingFromTarget();
-      // Sync debug zone positions every frame since they don't automatically follow the sprite and it's important for them to be accurate for debugging purposes.
-      // this.syncDebugZones();
-      // Check for overlaps with the attack zones every frame so the enemy can react immediately when the player enters them, even if the enemy is currently performing another action.
+      // actualizar posición de las zonas de overlap para detección de ataques
       this.UpdateOverlapZonesLocation();
-      // Check for overlaps with the attack zones every frame so the enemy can react immediately when the player enters them, even if the enemy is currently performing another action.
-      this.checkOverlapZones();
+      // verificar si el jugador está dentro de las zonas de ataque para iniciar ataques
       if (!this.aiEnabled || !this.targetSprite || !this.targetSprite.active) {
         this.stopBodyMovement();
         if (!this.isHurting && !this.isAttacking) {
@@ -589,7 +705,15 @@
         return;
       }
 
+      this.checkOverlapZones();
+
       if (this.isHurting || this.isAttacking) {
+        return;
+      }
+
+      if (!this.debugMode.bEnemyCanChase) {
+        this.stopBodyMovement();
+        this.playLoopAnimation("idle");
         return;
       }
 
@@ -612,6 +736,10 @@
     destroy() {
       this.clearAnimationCompletion();
       this.hideActiveAttackHitbox();
+      if (this.hud) {
+        this.hud.destroy();
+        this.hud = null;
+      }
       this.finalizeDeath();
     }
   }

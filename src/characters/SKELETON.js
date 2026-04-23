@@ -16,6 +16,32 @@
           moveSpeed: 74,
           attackSpeed: 0.9
         },
+        meleeHitBoxConfig: {       
+          width: 30,
+          height: 50,
+          offsetX: 40,
+          offsetY: 0
+        },
+        meleeTriggerConfig: {
+          width: 74,
+          height: 60,
+          offsetX: 58,
+          offsetY: 10
+        },
+        rangeTriggerConfig: {
+          width: 156,
+          height: 64,
+          offsetX: 98,
+          offsetY: 10
+        },
+        combatConfig: {
+          combatType:[
+            "melee",
+            "range"
+          ],
+          mainAttackMode: "melee",
+          canUseBothAttacks: false
+        },
         movement: {
           mode: "ground",
           stopDistance: 30

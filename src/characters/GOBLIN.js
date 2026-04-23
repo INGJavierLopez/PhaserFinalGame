@@ -8,13 +8,38 @@
       return {
         key: "goblin",
         displayName: "GOBLIN",
-        attackMode: "range",
         stats: {
           baseDamage: 12,
           roundDamageBonus: 3,
           maxHealth: 58,
           moveSpeed: 82,
           attackSpeed: 1
+        },
+        meleeHitBoxConfig: {       
+          width: 30,
+          height: 50,
+          offsetX: 40,
+          offsetY: 0
+        },
+        meleeTriggerConfig: {
+          width: 74,
+          height: 60,
+          offsetX: 58,
+          offsetY: 10
+        },
+        rangeTriggerConfig: {
+          width: 156,
+          height: 64,
+          offsetX: 98,
+          offsetY: 10
+        },
+        combatConfig: {
+          combatType:[
+            "melee",
+            "range"
+          ],
+          mainAttackMode: "melee",
+          canUseBothAttacks: false
         },
         movement: {
           mode: "ground",

@@ -15,11 +15,11 @@
       this.enemies = null;
       this.enemyUnits = [];
       this.gameSceneHUD = null;
-      this.enemyHUD = null;
       this.platforms = null;
+      this.debugMode = false;
     }
 
-    init(data) {
+    init(data) {  
       this.roundNumber = (data && data.roundNumber) || 1;
       this.roundBannerDurationSeconds = data && typeof data.roundBannerDurationSeconds === "number"
         ? Math.max(0, data.roundBannerDurationSeconds)
@@ -92,10 +92,7 @@
       this.cameras.main.startFollow(this.playerCharacter.sprite, true, 0.08, 0.08);
 
       this.gameSceneHUD = new GameSceneHUD(this);
-      this.gameSceneHUD.create(this.roundState, this.roundNumber);
-
-      this.enemyHUD = new EnemyHUD(this);
-      this.enemyHUD.create(16, 106, this.enemies.countActive(true));
+      this.gameSceneHUD.create(this.roundState, this.roundNumber, this.enemies.countActive(true));
 
       this.startCurrentRound();
     }
@@ -121,10 +118,18 @@
       return [Ojo, GOBLIN, HONGO, SKELETON];
     }
 
+    getEnemyDebugModeConfig() {
+      return {
+        bEnemyCanChase: !this.debugMode,
+        bEnemyCanAttack: true
+      };
+    }
+
     spawnEnemy(EnemyClass, x, y) {
       const enemy = new EnemyClass(this, this.enemies, x, y, {
         roundNumber: this.roundNumber,
-        targetSprite: this.playerCharacter ? this.playerCharacter.sprite : null
+        targetSprite: this.playerCharacter ? this.playerCharacter.sprite : null,
+        debugMode: this.getEnemyDebugModeConfig()
       });
       this.enemyUnits.push(enemy);
     }
@@ -143,21 +148,19 @@
       ];
       const spawnQueue = [];
 
-      for (let i = 0; i < this.roundNumber; i++) {
+      const waveCopies = this.debugMode ? 1 : this.roundNumber;
+      for (let i = 0; i < waveCopies; i++) {
         enemyClasses.forEach((EnemyClass) => {
           spawnQueue.push(EnemyClass);
         });
       }
 
       Phaser.Utils.Array.Shuffle(spawnQueue);
-
-      // Spawn one unit of each enemy class per round multiplier.
       for (let i = 0; i < spawnQueue.length; i++) {
         const spawnPoint = spawnPoints[i % spawnPoints.length];
         const spawnX = Phaser.Math.Clamp(spawnPoint.x + Phaser.Math.Between(-35, 35), 120, 1280);
         const spawnY = Phaser.Math.Clamp(spawnPoint.y + Phaser.Math.Between(-20, 20), 120, 380);
-        this.spawnEnemy(SKELETON, spawnX, spawnY);
-        break; // --- IGNORE --- Remove this break to spawn more enemies per round.
+        this.spawnEnemy(spawnQueue[i], spawnX, spawnY);
       }
     }
 
@@ -180,7 +183,7 @@
     startCurrentRound() {
       this.setRoundState(RoundState.NuevaRonda);
       this.gameSceneHUD.updateRoundNumber(this.roundNumber);
-      this.enemyHUD.updateRemaining(this.enemies.countActive(true));
+      this.gameSceneHUD.updateRemainingEnemies(this.enemies.countActive(true));
       this.setEnemiesMoving(false);
 
       const roundBannerDuration = this.gameSceneHUD.showRoundBanner(this.roundNumber, this.roundBannerDurationSeconds);
@@ -258,8 +261,8 @@
 
     handleEnemyDefeated(enemyUnit) {
       this.removeInactiveEnemies();
-      if (this.enemyHUD) {
-        this.enemyHUD.updateRemaining(this.enemies.countActive(true));
+      if (this.gameSceneHUD) {
+        this.gameSceneHUD.updateRemainingEnemies(this.enemies.countActive(true));
       }
     }
 

@@ -61,8 +61,8 @@
       this.ensureAnimations();
       this.sprite = this.scene.physics.add.sprite(x, y, "heroIdle", 0);
       this.sprite.setCollideWorldBounds(true);
-      this.sprite.body.setSize(28, 44);
-      this.sprite.body.setOffset(18, 18);
+      this.sprite.body.setSize(20, 32);
+      this.sprite.body.setOffset(40, 30);
       this.sprite.play("hero_idle");
 
       this.attackHitbox = this.scene.physics.add.sprite(x, y, "attackTexture");

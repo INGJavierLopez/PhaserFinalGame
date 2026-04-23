@@ -4,11 +4,12 @@
       this.scene = scene;
       this.statusText = null;
       this.infoText = null;
+      this.remainingEnemiesText = null;
       this.roundBannerText = null;
       this.roundBannerTimer = null;
     }
 
-    create(roundState, roundNumber) {
+    create(roundState, roundNumber, remainingEnemies) {
       this.statusText = this.scene.add.text(16, 16, "Estado: " + roundState, {
         fontFamily: "Arial",
         fontSize: "20px",
@@ -25,12 +26,27 @@
         padding: { left: 8, right: 8, top: 4, bottom: 4 }
       }).setScrollFactor(0).setDepth(100);
 
+      this.remainingEnemiesText = this.scene.add.text(this.scene.scale.width - 16, 16, "", {
+        fontFamily: "Arial",
+        fontSize: "16px",
+        color: "#ffffff",
+        backgroundColor: "#000000",
+        padding: { left: 8, right: 8, top: 4, bottom: 4 }
+      }).setOrigin(1, 0).setScrollFactor(0).setDepth(100);
+
       this.updateRoundNumber(roundNumber);
+      this.updateRemainingEnemies(remainingEnemies || 0);
     }
 
     updateRoundNumber(roundNumber) {
       if (this.infoText) {
         this.infoText.setText("Ronda " + roundNumber + " - Elimina todos los enemigos");
+      }
+    }
+
+    updateRemainingEnemies(remainingEnemies) {
+      if (this.remainingEnemiesText) {
+        this.remainingEnemiesText.setText("Enemigos: " + remainingEnemies);
       }
     }
 
