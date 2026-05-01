@@ -87,10 +87,7 @@
       this.globalAttackCooldownTimer = null;
 
       // parámetros base
-      this.attackWindupMs = 250;
-      this.attackActiveMs = 200;
-      this.globalAttackCooldownMs = 1000;
-      
+
       this.attackImpactTimer = null;
       this.attackDeactivateTimer = null;
       this.attackHitboxOverlap = null;
@@ -201,7 +198,7 @@
           const isMeleeOverlaping = this.scene.physics.world.overlap(this.MeleeOverlapZone, this.targetSprite);
           if (isMeleeOverlaping) {
             console.log("Player is in melee zone");
-            this.startAttack("attack1");
+            this.startAttack("attack2");
           }
         }
       }
@@ -213,7 +210,7 @@
         if(isRangeOverlaping)
         {
           console.log("Player is in range zone");
-          this.startAttack("attack1");
+          this.startAttack("attack2");
         }
       }
     }
@@ -449,6 +446,7 @@
 
     startAttack(attackName) {
       const attackConfig = this.getAnimationConfig(attackName);
+      console.log("Trying to start attack:", attackName, "with config:", attackConfig);
       if (
         !attackConfig
         || this.isDead
@@ -482,13 +480,17 @@
           return;
         }
 
-        // al terminar la animación, si ya no está atacando, vuelve a idle
-        if (!this.isAttacking) {
-          this.state = "idle";
+        // El ataque termina solo cuando la animacion completa todos sus frames.
+        if (this.state !== "attacking") {
+          return;
+        }
 
-          if (this.aiEnabled) {
-            this.playLoopAnimation("idle");
-          }
+        this.isAttacking = false;
+        this.state = "idle";
+        this.stopBodyMovement();
+
+        if (this.aiEnabled) {
+          this.playLoopAnimation("idle");
         }
       });
 
@@ -551,14 +553,7 @@
             this.attackHitboxOverlap = null;
           }
 
-          // termina ataque
-          this.isAttacking = false;
-          this.state = "idle";
-
-          if (this.aiEnabled && !this.isDead) {
-            this.playLoopAnimation("idle");
-          }
-
+          // Termina la ventana activa del hitbox, pero la animacion sigue.
           // =========================
           // COOLDOWN GENERAL
           // =========================
@@ -708,6 +703,7 @@
       this.checkOverlapZones();
 
       if (this.isHurting || this.isAttacking) {
+        this.stopBodyMovement();
         return;
       }
 

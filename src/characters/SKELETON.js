@@ -94,11 +94,13 @@
             frameHeight: 150,
             startFrame: 0,
             endFrame: 7,
-            frameRate: 10,
+            frameRate: 8,
             repeat: 0,
             impactFrame: 3,
             activeFrames: 1,
             cooldownMs: 700,
+            attackWindupMs: 600,  
+            attackActiveMs: 100,
             damageMultiplier: 1,
             hitbox: {
               width: 82,
@@ -119,6 +121,8 @@
             impactFrame: 5,
             activeFrames: 2,
             cooldownMs: 3000,
+            attackWindupMs: 600,
+            attackActiveMs: 100,
             damageMultiplier: 2.15,
             hitbox: {
               width: 96,

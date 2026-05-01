@@ -16,7 +16,7 @@
       this.enemyUnits = [];
       this.gameSceneHUD = null;
       this.platforms = null;
-      this.debugMode = false;
+      this.debugMode = true;
     }
 
     init(data) {  
@@ -160,7 +160,7 @@
         const spawnPoint = spawnPoints[i % spawnPoints.length];
         const spawnX = Phaser.Math.Clamp(spawnPoint.x + Phaser.Math.Between(-35, 35), 120, 1280);
         const spawnY = Phaser.Math.Clamp(spawnPoint.y + Phaser.Math.Between(-20, 20), 120, 380);
-        this.spawnEnemy(spawnQueue[i], spawnX, spawnY);
+        this.spawnEnemy(SKELETON, spawnX, spawnY);
       }
     }
 
